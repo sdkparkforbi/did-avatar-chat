@@ -58,7 +58,8 @@ def ask_gpt(user_text):
     # 화면에 객체가 있으면 알려주기
     if st.session_state.objects:
         objects_text = ", ".join(st.session_state.objects)
-        system_msg += f"\n현재 화면에 {objects_text}가 있습니다."
+        system_msg += f"\n\n【중요】현재 화면에 다음 객체들이 보입니다: {objects_text}"
+        system_msg += "\n화면에 대한 질문을 받으면, 보이는 모든 객체를 빠짐없이 언급해주세요."
     
     # GPT에게 질문하기
     response = client.chat.completions.create(
