@@ -200,43 +200,44 @@ def create_did_webrtc_component(did_key_encoded, openai_key):
             }}
             
             // D-ID Agent 생성
-            async function createAgent() {{
+            async function createAgent() {
                 updateStatus('Agent 생성 중...');
                 
-                try {{
-                    const response = await fetch('https://api.d-id.com/agents', {{
+                try {
+                    const response = await fetch('https://api.d-id.com/agents', {
                         method: 'POST',
-                        headers: {{
-                            'Authorization': `Basic ${{DID_API_KEY_ENCODED}}`,
+                        headers: {
+                            'Authorization': `Basic ${DID_API_KEY_ENCODED}`,
                             'Content-Type': 'application/json'
-                        }},
-                        body: JSON.stringify({{
-                            presenter: {{
+                        },
+                        body: JSON.stringify({
+                            presenter: {
                                 type: 'talk',
-                                voice: {{
+                                voice: {
                                     type: 'microsoft',
                                     voice_id: 'ko-KR-SunHiNeural'
-                                }},
-                                source_url: 'https://create-images-results.d-id.com/DefaultPresenters/Emma_f/v1_image.jpeg'
-                            }},
+                                },
+                                thumbnail: 'https://create-images-results.d-id.com/DefaultPresenters/Emma_f/thumbnail.jpeg',
+                                source_url: 'https://create-images-results.d-id.com/DefaultPresenters/Emma_f/image.png'
+                            },
                             preview_name: 'Emma'
-                        }})
-                    }});
+                        })
+                    });
                     
-                    if (!response.ok) {{
+                    if (!response.ok) {
                         const errorData = await response.json();
-                        throw new Error(`Agent 생성 실패: ${{response.status}} - ${{JSON.stringify(errorData)}}`);
-                    }}
+                        throw new Error(`Agent 생성 실패: ${response.status} - ${JSON.stringify(errorData)}`);
+                    }
                     
                     const data = await response.json();
                     console.log('Agent 생성 성공:', data);
                     return data.id;
                     
-                }} catch (error) {{
+                } catch (error) {
                     console.error('Agent 생성 오류:', error);
                     throw error;
-                }}
-            }}
+                }
+            }
             
             // D-ID 스트림 생성
             async function createStream(agentId) {{
