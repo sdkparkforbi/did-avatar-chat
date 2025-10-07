@@ -22,14 +22,27 @@ st.set_page_config(
 )
 
 # =============================================================================
-# 2. API 키
+# 2. API 키 (개선된 처리)
 # =============================================================================
 
 try:
-    DID_KEY = st.secrets["DID_API_KEY"]
+    # D-ID API 키 처리
+    DID_KEY_RAW = st.secrets["DID_API_KEY"]
+    
+    # 이미 Base64 인코딩되어 있는지 확인
+    if ':' in DID_KEY_RAW:
+        # Raw 형식 (email:key) → Base64 인코딩 필요
+        DID_KEY_ENCODED = base64.b64encode(DID_KEY_RAW.encode()).decode()
+    else:
+        # 이미 인코딩된 형식
+        DID_KEY_ENCODED = DID_KEY_RAW
+    
     OPENAI_KEY = st.secrets["OPENAI_API_KEY"]
-except:
-    st.error("API 키를 설정하세요")
+    
+    st.sidebar.success("✅ API 키 로드 완료")
+    
+except Exception as e:
+    st.error(f"API 키 오류: {str(e)}")
     st.stop()
 
 # =============================================================================
@@ -102,13 +115,12 @@ def ask_gpt_with_image(user_text, image_base64=None):
         return f"오류: {str(e)}"
 
 # =============================================================================
-# 5. D-ID WebRTC HTML/JavaScript
+# 5. D-ID WebRTC HTML/JavaScript (수정됨)
 # =============================================================================
 
-def create_did_webrtc_component(did_key, openai_key):
+def create_did_webrtc_component(did_key_encoded, openai_key):
     """D-ID WebRTC 컴포넌트 생성"""
     
-    # 이미지 정보를 JavaScript로 전달
     screen_objects_json = json.dumps(st.session_state.screen_objects)
     image_base64 = st.session_state.image_base64 or ""
     
@@ -129,6 +141,7 @@ def create_did_webrtc_component(did_key, openai_key):
                 width: 100%; 
                 max-width: 640px; 
                 border-radius: 10px;
+                background: #000;
             }}
             .status {{
                 margin-top: 10px;
@@ -152,6 +165,7 @@ def create_did_webrtc_component(did_key, openai_key):
             }}
             button:hover {{ background: #1976D2; }}
             button:disabled {{ background: #ccc; cursor: not-allowed; }}
+            .error {{ background: #ffebee; color: #c62828; }}
         </style>
     </head>
     <body>
@@ -167,7 +181,8 @@ def create_did_webrtc_component(did_key, openai_key):
         </div>
 
         <script>
-            const DID_API_KEY = '{did_key}';
+            // API 키 (이미 Base64 인코딩된 상태)
+            const DID_API_KEY_ENCODED = '{did_key_encoded}';
             const OPENAI_API_KEY = '{openai_key}';
             const SCREEN_OBJECTS = {screen_objects_json};
             const IMAGE_BASE64 = '{image_base64}';
@@ -175,10 +190,12 @@ def create_did_webrtc_component(did_key, openai_key):
             let peerConnection;
             let streamId;
             let sessionId;
-            let dataChannel;
+            let agentId;
             
-            function updateStatus(message) {{
-                document.getElementById('status').textContent = message;
+            function updateStatus(message, isError = false) {{
+                const statusEl = document.getElementById('status');
+                statusEl.textContent = message;
+                statusEl.className = isError ? 'status error' : 'status';
                 console.log(message);
             }}
             
@@ -186,137 +203,197 @@ def create_did_webrtc_component(did_key, openai_key):
             async function createAgent() {{
                 updateStatus('Agent 생성 중...');
                 
-                const response = await fetch('https://api.d-id.com/agents', {{
-                    method: 'POST',
-                    headers: {{
-                        'Authorization': `Basic ${{btoa(DID_API_KEY)}}`,
-                        'Content-Type': 'application/json'
-                    }},
-                    body: JSON.stringify({{
-                        presenter: {{
-                            type: 'talk',
-                            voice: {{
-                                type: 'microsoft',
-                                voice_id: 'ko-KR-SunHiNeural'
-                            }},
-                            source_url: 'https://create-images-results.d-id.com/DefaultPresenters/Emma_f/v1_image.jpeg'
+                try {{
+                    const response = await fetch('https://api.d-id.com/agents', {{
+                        method: 'POST',
+                        headers: {{
+                            'Authorization': `Basic ${{DID_API_KEY_ENCODED}}`,
+                            'Content-Type': 'application/json'
                         }},
-                        preview_name: 'Emma'
-                    }})
-                }});
-                
-                if (!response.ok) throw new Error('Agent 생성 실패');
-                
-                const data = await response.json();
-                return data.id;
+                        body: JSON.stringify({{
+                            presenter: {{
+                                type: 'talk',
+                                voice: {{
+                                    type: 'microsoft',
+                                    voice_id: 'ko-KR-SunHiNeural'
+                                }},
+                                source_url: 'https://create-images-results.d-id.com/DefaultPresenters/Emma_f/v1_image.jpeg'
+                            }},
+                            preview_name: 'Emma'
+                        }})
+                    }});
+                    
+                    if (!response.ok) {{
+                        const errorData = await response.json();
+                        throw new Error(`Agent 생성 실패: ${{response.status}} - ${{JSON.stringify(errorData)}}`);
+                    }}
+                    
+                    const data = await response.json();
+                    console.log('Agent 생성 성공:', data);
+                    return data.id;
+                    
+                }} catch (error) {{
+                    console.error('Agent 생성 오류:', error);
+                    throw error;
+                }}
             }}
             
             // D-ID 스트림 생성
             async function createStream(agentId) {{
                 updateStatus('스트림 생성 중...');
                 
-                const response = await fetch(`https://api.d-id.com/agents/${{agentId}}/streams`, {{
-                    method: 'POST',
-                    headers: {{
-                        'Authorization': `Basic ${{btoa(DID_API_KEY)}}`,
-                        'Content-Type': 'application/json'
-                    }},
-                    body: JSON.stringify({{
-                        source_url: 'https://create-images-results.d-id.com/DefaultPresenters/Emma_f/v1_image.jpeg'
-                    }})
-                }});
-                
-                if (!response.ok) throw new Error('스트림 생성 실패');
-                
-                const data = await response.json();
-                streamId = data.id;
-                sessionId = data.session_id;
-                
-                return data;
+                try {{
+                    const response = await fetch(`https://api.d-id.com/agents/${{agentId}}/streams`, {{
+                        method: 'POST',
+                        headers: {{
+                            'Authorization': `Basic ${{DID_API_KEY_ENCODED}}`,
+                            'Content-Type': 'application/json'
+                        }},
+                        body: JSON.stringify({{
+                            source_url: 'https://create-images-results.d-id.com/DefaultPresenters/Emma_f/v1_image.jpeg'
+                        }})
+                    }});
+                    
+                    if (!response.ok) {{
+                        const errorData = await response.json();
+                        throw new Error(`스트림 생성 실패: ${{response.status}} - ${{JSON.stringify(errorData)}}`);
+                    }}
+                    
+                    const data = await response.json();
+                    console.log('스트림 생성 성공:', data);
+                    
+                    streamId = data.id;
+                    sessionId = data.session_id;
+                    
+                    return data;
+                    
+                }} catch (error) {{
+                    console.error('스트림 생성 오류:', error);
+                    throw error;
+                }}
             }}
             
             // WebRTC 연결
-            async function setupWebRTC(streamData) {{
+            async function setupWebRTC() {{
                 updateStatus('WebRTC 연결 중...');
                 
-                peerConnection = new RTCPeerConnection({{
-                    iceServers: [{{ urls: 'stun:stun.l.google.com:19302' }}]
-                }});
-                
-                // Track 수신
-                peerConnection.ontrack = (event) => {{
-                    const videoElement = document.getElementById('video-element');
-                    videoElement.srcObject = event.streams[0];
-                    updateStatus('연결 완료!');
-                }};
-                
-                // ICE candidate 처리
-                peerConnection.onicecandidate = async (event) => {{
-                    if (event.candidate) {{
-                        await fetch(`https://api.d-id.com/agents/${{streamData.agent_id}}/streams/${{streamId}}/ice`, {{
-                            method: 'POST',
-                            headers: {{
-                                'Authorization': `Basic ${{btoa(DID_API_KEY)}}`,
-                                'Content-Type': 'application/json'
-                            }},
-                            body: JSON.stringify({{
-                                candidate: event.candidate.candidate,
-                                sdpMLineIndex: event.candidate.sdpMLineIndex,
-                                session_id: sessionId
-                            }})
-                        }});
-                    }}
-                }};
-                
-                // SDP Offer/Answer 처리
-                const sdpResponse = await fetch(`https://api.d-id.com/agents/${{streamData.agent_id}}/streams/${{streamId}}/sdp`, {{
-                    method: 'POST',
-                    headers: {{
-                        'Authorization': `Basic ${{btoa(DID_API_KEY)}}`,
-                        'Content-Type': 'application/json'
-                    }},
-                    body: JSON.stringify({{ session_id: sessionId }})
-                }});
-                
-                const {{ sdp, type }} = await sdpResponse.json();
-                await peerConnection.setRemoteDescription({{ type, sdp }});
-                
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                
-                await fetch(`https://api.d-id.com/agents/${{streamData.agent_id}}/streams/${{streamId}}/sdp`, {{
-                    method: 'PATCH',
-                    headers: {{
-                        'Authorization': `Basic ${{btoa(DID_API_KEY)}}`,
-                        'Content-Type': 'application/json'
-                    }},
-                    body: JSON.stringify({{
-                        answer: {{
-                            type: answer.type,
-                            sdp: answer.sdp
+                try {{
+                    peerConnection = new RTCPeerConnection({{
+                        iceServers: [
+                            {{ urls: 'stun:stun.l.google.com:19302' }},
+                            {{ urls: 'stun:stun1.l.google.com:19302' }}
+                        ]
+                    }});
+                    
+                    // Track 수신
+                    peerConnection.ontrack = (event) => {{
+                        console.log('Track 수신:', event);
+                        const videoElement = document.getElementById('video-element');
+                        videoElement.srcObject = event.streams[0];
+                        updateStatus('✅ 연결 완료! 아바타 준비됨');
+                    }};
+                    
+                    // 연결 상태 모니터링
+                    peerConnection.onconnectionstatechange = () => {{
+                        console.log('Connection state:', peerConnection.connectionState);
+                        if (peerConnection.connectionState === 'connected') {{
+                            updateStatus('✅ WebRTC 연결됨');
+                        }}
+                    }};
+                    
+                    // ICE candidate 처리
+                    peerConnection.onicecandidate = async (event) => {{
+                        if (event.candidate) {{
+                            console.log('ICE candidate:', event.candidate);
+                            
+                            await fetch(`https://api.d-id.com/agents/${{agentId}}/streams/${{streamId}}/ice`, {{
+                                method: 'POST',
+                                headers: {{
+                                    'Authorization': `Basic ${{DID_API_KEY_ENCODED}}`,
+                                    'Content-Type': 'application/json'
+                                }},
+                                body: JSON.stringify({{
+                                    candidate: event.candidate.candidate,
+                                    sdpMLineIndex: event.candidate.sdpMLineIndex,
+                                    session_id: sessionId
+                                }})
+                            }});
+                        }}
+                    }};
+                    
+                    // SDP Offer 받기
+                    const sdpResponse = await fetch(`https://api.d-id.com/agents/${{agentId}}/streams/${{streamId}}/sdp`, {{
+                        method: 'POST',
+                        headers: {{
+                            'Authorization': `Basic ${{DID_API_KEY_ENCODED}}`,
+                            'Content-Type': 'application/json'
                         }},
-                        session_id: sessionId
-                    }})
-                }});
+                        body: JSON.stringify({{
+                            session_id: sessionId
+                        }})
+                    }});
+                    
+                    if (!sdpResponse.ok) {{
+                        throw new Error('SDP Offer 실패');
+                    }}
+                    
+                    const {{ sdp, type }} = await sdpResponse.json();
+                    console.log('SDP Offer 수신');
+                    
+                    await peerConnection.setRemoteDescription({{ type, sdp }});
+                    
+                    // Answer 생성
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    console.log('SDP Answer 생성');
+                    
+                    // Answer 전송
+                    await fetch(`https://api.d-id.com/agents/${{agentId}}/streams/${{streamId}}/sdp`, {{
+                        method: 'PATCH',
+                        headers: {{
+                            'Authorization': `Basic ${{DID_API_KEY_ENCODED}}`,
+                            'Content-Type': 'application/json'
+                        }},
+                        body: JSON.stringify({{
+                            answer: {{
+                                type: answer.type,
+                                sdp: answer.sdp
+                            }},
+                            session_id: sessionId
+                        }})
+                    }});
+                    
+                    console.log('SDP Answer 전송 완료');
+                    
+                }} catch (error) {{
+                    console.error('WebRTC 설정 오류:', error);
+                    throw error;
+                }}
             }}
             
             // 연결 시작
             async function connectDID() {{
                 try {{
                     document.getElementById('connect-btn').disabled = true;
+                    updateStatus('연결 시작...');
                     
-                    const agentId = await createAgent();
-                    const streamData = await createStream(agentId);
-                    streamData.agent_id = agentId;
+                    // 1. Agent 생성
+                    agentId = await createAgent();
+                    updateStatus(`Agent 생성 완료 (ID: ${{agentId.substring(0, 8)}}...)`);
                     
-                    await setupWebRTC(streamData);
+                    // 2. 스트림 생성
+                    await createStream(agentId);
+                    updateStatus('스트림 생성 완료');
+                    
+                    // 3. WebRTC 연결
+                    await setupWebRTC();
                     
                     document.getElementById('disconnect-btn').disabled = false;
-                    updateStatus('음성 대화 준비 완료!');
+                    updateStatus('✅ 모든 연결 완료!');
                     
                 }} catch (error) {{
                     console.error('연결 오류:', error);
-                    updateStatus('오류: ' + error.message);
+                    updateStatus('오류: ' + error.message, true);
                     document.getElementById('connect-btn').disabled = false;
                 }}
             }}
@@ -327,6 +404,13 @@ def create_did_webrtc_component(did_key, openai_key):
                     peerConnection.close();
                     peerConnection = null;
                 }}
+                
+                const videoElement = document.getElementById('video-element');
+                if (videoElement.srcObject) {{
+                    videoElement.srcObject.getTracks().forEach(track => track.stop());
+                    videoElement.srcObject = null;
+                }}
+                
                 updateStatus('연결 종료됨');
                 document.getElementById('connect-btn').disabled = false;
                 document.getElementById('disconnect-btn').disabled = true;
@@ -342,14 +426,20 @@ def create_did_webrtc_component(did_key, openai_key):
 # 6. UI - 레이아웃
 # =============================================================================
 
-st.title("AI 교사 + 실시간 음성")
+st.title("🤖 AI 교사 + 실시간 음성")
+
+# 사이드바 정보
+with st.sidebar:
+    st.header("ℹ️ 정보")
+    st.write(f"D-ID 키 형식: {'Raw' if ':' in DID_KEY_RAW else 'Encoded'}")
+    st.write(f"인코딩된 키 길이: {len(DID_KEY_ENCODED)}")
 
 # 2열 레이아웃
 col1, col2 = st.columns([1, 1])
 
 # 왼쪽: 이미지 & 객체
 with col1:
-    st.subheader("학습 이미지")
+    st.subheader("📚 학습 이미지")
     
     uploaded_file = st.file_uploader("이미지 업로드", type=['jpg', 'jpeg', 'png'])
     
@@ -362,30 +452,33 @@ with col1:
     
     st.markdown("---")
     
-    st.subheader("화면 객체")
+    st.subheader("🖼️ 화면 객체")
     new_object = st.text_input("객체 추가")
-    if st.button("추가"):
+    if st.button("➕ 추가"):
         if new_object:
             st.session_state.screen_objects.append(new_object)
             st.rerun()
     
-    for obj in st.session_state.screen_objects:
-        st.write(f"• {obj}")
+    if st.session_state.screen_objects:
+        for obj in st.session_state.screen_objects:
+            st.write(f"• {obj}")
+    else:
+        st.info("객체를 추가하세요")
 
 # 오른쪽: D-ID 아바타
 with col2:
-    st.subheader("D-ID 실시간 아바타")
+    st.subheader("🎭 D-ID 실시간 아바타")
     
     # WebRTC 컴포넌트 표시
-    webrtc_html = create_did_webrtc_component(DID_KEY, OPENAI_KEY)
-    components.html(webrtc_html, height=600)
+    webrtc_html = create_did_webrtc_component(DID_KEY_ENCODED, OPENAI_KEY)
+    components.html(webrtc_html, height=650)
 
 # =============================================================================
-# 7. 텍스트 대화 (임시 - 나중에 음성으로 대체)
+# 7. 텍스트 대화 (임시 테스트)
 # =============================================================================
 
 st.markdown("---")
-st.subheader("텍스트 대화 (테스트용)")
+st.subheader("💬 텍스트 대화 (테스트용)")
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -403,18 +496,21 @@ if user_input:
     st.rerun()
 
 # =============================================================================
-# 8. 안내
+# 8. 디버그 정보
 # =============================================================================
 
-with st.expander("사용 방법"):
+with st.expander("🔧 디버그 정보"):
+    st.code(f"""
+D-ID API Key (처음 10자): {DID_KEY_ENCODED[:10]}...
+OpenAI API Key (처음 10자): {OPENAI_KEY[:10]}...
+화면 객체: {st.session_state.screen_objects}
+이미지: {'있음' if st.session_state.image_base64 else '없음'}
+    """)
+    
     st.markdown("""
-    ### Step 1 테스트
-    
-    1. 이미지 업로드
-    2. 객체 추가
-    3. 오른쪽에서 "연결 시작" 클릭
-    4. 아바타 화면 확인
-    
-    현재는 기본 연결만 테스트합니다.
-    다음 단계에서 음성 인식을 추가하겠습니다.
+    ### 테스트 순서:
+    1. 사이드바에서 API 키 형식 확인
+    2. "연결 시작" 버튼 클릭
+    3. 브라우저 콘솔 확인 (F12)
+    4. 오류 메시지 확인
     """)
